@@ -18,11 +18,11 @@ Set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, and `NEX
 
 ## Database setup and upgrade
 
-Run [`supabase/setup.sql`](supabase/setup.sql) in the project's Supabase SQL editor. It supports a fresh database or the earlier MoodGrid schema and is safe to repeat after a successful run. It does not discard legacy journal data during installation. Alternatively, apply the seven ordered source migrations with the Supabase CLI, reconciling migration history if SQL was previously applied manually. Regenerate the SQL-editor bundle with `python3 scripts/generate-setup.py` after editing source migrations.
+Run [`supabase/setup.sql`](supabase/setup.sql) in the project's Supabase SQL editor. It supports a fresh database or the earlier MoodGrid schema and is safe to repeat after a successful run. It does not discard legacy journal data during installation. Alternatively, apply the eight ordered source migrations with the Supabase CLI, reconciling migration history if SQL was previously applied manually. Regenerate the SQL-editor bundle with `python3 scripts/generate-setup.py` after editing source migrations.
 
 The encryption migration is [`202609180001_encrypted_vault.sql`](supabase/migrations/202609180001_encrypted_vault.sql). It requires the preceding profile, emoji, and sticker migrations. Deploy the application and install the database migration together: it deliberately freezes old plaintext writes, and the new application fails closed if encrypted storage is unavailable. An older application version cannot write after this migration is applied.
 
-**The hosted encryption migration has not been applied by this implementation session.** A publishable key cannot run DDL. Project-owner SQL access is required. Do not announce that existing production data has all been encrypted until users have migrated and backup/retention work has been completed.
+**Upgrading an existing encrypted installation:** run [`202609180002_sticker_deletion.sql`](supabase/migrations/202609180002_sticker_deletion.sql) in Supabase SQL Editor to enable owner-only deletion of encrypted sticker files. It does not delete existing data. This migration has not been applied to the hosted project by this code change; a Git push does not execute SQL. Without it, removed stickers stay in an encrypted cleanup queue until the policy is installed and cleanup is retried.
 
 ## Authentication
 
@@ -62,7 +62,13 @@ Source references: [Web Crypto AES-GCM parameters](https://developer.mozilla.org
 
 The process is per account and requires the user to choose their own passphrase. Administrators cannot perform this step on the user's behalf while also remaining unable to decrypt. Users who have not completed migration may still have legacy plaintext. Previous backups, exports, logs, or prior AI requests cannot be retroactively encrypted. Operators must audit and expire those copies through the relevant providers' retention controls. Live deletion is not a promise of historical erasure. [Supabase storage deletion](https://supabase.com/docs/guides/storage/management/delete-objects) and [backup behavior](https://supabase.com/docs/guides/platform/backups) describe these separate mechanisms.
 
-Abandoned uploads can leave encrypted orphan objects if a later database write fails. These contain no readable image/filename, but may consume storage. Storage administration can delete such ciphertext; the application intentionally grants no general object overwrite/delete permission for live encrypted files.
+Abandoned uploads can leave encrypted orphan objects if a later database write fails. These contain no readable image/filename, but may consume storage. Storage administration can delete such ciphertext. The application does not grant object overwrite permission. The deletion migration grants authenticated owners DELETE access only to their encrypted sticker paths after migration completes.
+
+## Deleting moments and stickers
+
+Use the trash button in Recent moments, or **Delete moment** in a check-in dialog. Deletion rewrites the encrypted vault using its expected revision and removes tags from that moment only if no other entry uses them. Calendar, streaks, insights, and tag suggestions update from the same local state.
+
+Each uploaded sticker has a delete control in the library and picker. Stickers referenced by saved moments cannot be deleted until those moments are changed or removed. An unused sticker is first removed from the encrypted document, with its random file path added to an encrypted cleanup queue. The browser then deletes the object through the Supabase Storage API and verifies its absence. Missing permissions, network errors, or an interrupted follow-up save leave a durable retry queue. Retry in the library or unlock again. Removed previews are revoked from browser memory. Live deletion does not purge historical backups or exports.
 
 ## Privacy claim and threat model
 
@@ -76,7 +82,7 @@ A database reader without the passphrase/recovery key cannot decrypt properly en
 
 - Daily check-in with 3,963 emoji choices, searchable categories, skin tones/families/flags, optional 280-character notes, eight tags, and sticker selection. One entry per date is maintained inside the encrypted document.
 - Private sticker library: PNG/JPG/WebP/GIF/WebM, up to 3 MiB per file and 20 uploads per batch. Export Telegram `.tgs` or messaging-app packs to supported individual files first. Original format validation occurs locally, before encryption.
-- Contribution calendar and edit dialogs, all derived locally after unlock.
+- Contribution calendar, edit dialogs, and confirmed moment/sticker deletion, all derived locally after unlock.
 - Insights presets: 7/14/30/60/90/180 days, one year, all time, or custom inclusive dates. Scores are optional for general emojis and stickers; unscored entries do not distort averages. Long ranges aggregate into bounded chart periods.
 - Local weekly reflection. No journal content is sent to an AI service.
 - Concise dark interface, responsive filters, keyboard emoji navigation, and animations.

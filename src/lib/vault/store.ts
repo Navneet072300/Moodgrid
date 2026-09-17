@@ -5,6 +5,7 @@ import { stickerFormat } from "../stickers";
 import { createKeys, decryptJSON, encryptJSON, open, recoverKey, seal, unlockKey, type KeyConfig } from "./crypto";
 import { documentForStorage, envelopeSchema, parseDocument, stickerSchema, vaultRowSchema, type VaultDocument, type VaultRow } from "./types";
 import type { Sticker } from "../types";
+import { validateStickerDeletes, withoutEntry, withoutSticker } from "./document";
 
 const BUCKET = "moodgrid-vault";
 const LEGACY_BUCKET = "moodgrid-stickers";
@@ -17,6 +18,7 @@ export async function loadVault(user: string): Promise<VaultRow | null> {
 async function readDocument(row: VaultRow, key: CryptoKey): Promise<VaultDocument> {
   const document = parseDocument(await decryptJSON(row.ciphertext, key, row.user_id));
   if (document.entries.some((item) => item.user_id !== row.user_id) || document.stickers.some((item) => item.user_id !== row.user_id || !item.storage_path.startsWith(`${row.user_id}/`))) throw new Error("Vault ownership verification failed.");
+  validateStickerDeletes(document, row.user_id);
   return document;
 }
 export async function encryptedFile(sticker: Sticker, key: CryptoKey): Promise<Uint8Array<ArrayBuffer>> {
@@ -125,4 +127,38 @@ export async function persistVault(vault: UnlockedVault, document: VaultDocument
   const { data, error } = await createClient().rpc("save_encrypted_vault", { p_vault_user_id: vault.row.user_id, p_expected_revision: vault.row.revision, p_ciphertext: ciphertext }).single();
   if (error) throw new Error("Your vault changed or the connection failed. Lock and unlock to load the latest journal before retrying.");
   return { ...vault, document, row: vaultRowSchema.parse(data) };
+}
+
+export async function deleteVaultEntry(vault: UnlockedVault, id: string): Promise<UnlockedVault> {
+  return persistVault(vault, withoutEntry(vault.document, id));
+}
+
+export async function deleteVaultSticker(vault: UnlockedVault, id: string): Promise<UnlockedVault> {
+  const document = withoutSticker(vault.document, id);
+  validateStickerDeletes(document, vault.row.user_id);
+  // Commit the removal and encrypted retry queue before touching the file.
+  // A stale revision must never delete an object still referenced by a newer vault.
+  return cleanupDeletedStickers(await persistVault(vault, document));
+}
+
+export async function cleanupDeletedStickers(vault: UnlockedVault): Promise<UnlockedVault> {
+  const paths = vault.document.pendingStickerDeletes ?? [];
+  if (!paths.length || vault.row.migration_stage !== "complete") return vault;
+  validateStickerDeletes(vault.document, vault.row.user_id);
+  const remaining: string[] = [];
+  const storage = createClient().storage.from(BUCKET);
+  for (const path of paths) {
+    try {
+      const { error } = await storage.remove([path]);
+      if (error) { remaining.push(path); continue; }
+      // RLS may silently remove zero objects. Verify absence, including retries
+      // after a successful deletion whose follow-up vault save was interrupted.
+      const filename = path.split("/")[1];
+      const { data, error: listError } = await storage.list(vault.row.user_id, { search: filename, limit: 2 });
+      if (listError || !data || data.some((file) => file.name === filename)) remaining.push(path);
+    } catch { remaining.push(path); }
+  }
+  if (remaining.length === paths.length) return vault;
+  try { return await persistVault(vault, { ...vault.document, pendingStickerDeletes: remaining }); }
+  catch { return vault; } // Keep the durable queue for the next unlock/retry.
 }

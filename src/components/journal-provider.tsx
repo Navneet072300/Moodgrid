@@ -6,8 +6,9 @@ import { getMood } from "@/lib/moods";
 import { todayInTimezone } from "@/lib/dates";
 import { entrySchema, usernameSchema } from "@/lib/validation";
 import { createClient } from "@/lib/supabase/client";
-import { addEncryptedSticker, encryptedFile, initializeVault, loadVault, persistVault, recoverVault, unlockVault, type UnlockedVault } from "@/lib/vault/store";
-import type { VaultRow } from "@/lib/vault/types";
+import { addEncryptedSticker, cleanupDeletedStickers, deleteVaultEntry, deleteVaultSticker, encryptedFile, initializeVault, loadVault, persistVault, recoverVault, unlockVault, type UnlockedVault } from "@/lib/vault/store";
+import { withoutEntry, withoutSticker } from "@/lib/vault/document";
+import type { VaultDocument, VaultRow } from "@/lib/vault/types";
 import { VaultGate } from "./vault-gate";
 import type { Entry, EntryInput, Profile, Sticker, Tag } from "@/lib/types";
 
@@ -17,6 +18,10 @@ type JournalContextValue = {
   rename: (username: string) => Promise<void>;
   uploadSticker: (file: File, name?: string) => Promise<Sticker>;
   save: (input: Omit<EntryInput, "timezone">) => Promise<Entry>;
+  deleteEntry: (id: string) => Promise<void>;
+  deleteSticker: (id: string) => Promise<void>;
+  pendingStickerDeletes: number;
+  retryStickerDeletes: () => Promise<void>;
 };
 const JournalContext = createContext<JournalContextValue | null>(null);
 export function JournalProvider({ children, initialEntries, initialTags, initialToday, email, initialProfile, demo = false }: {
@@ -26,6 +31,7 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
   const [entries, setEntries] = useState(demo ? initialEntries : []);
   const [tags, setTags] = useState(demo ? initialTags : []);
   const [stickers, setStickers] = useState<Sticker[]>([]);
+  const [pendingStickerDeletes, setPendingStickerDeletes] = useState(0);
   const [today, setToday] = useState(initialToday);
   const [timezone, setTimezone] = useState("UTC");
   const [unlocked, setUnlocked] = useState(false);
@@ -49,7 +55,7 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
   const lock = useCallback(() => {
     if (demo) return;
     epoch.current++; vault.current = null; row.current = null; writing.current = false;
-    clearUrls(); setEntries([]); setTags([]); setStickers([]); setUnlocked(false); setBusy(false); setProgress("");
+    clearUrls(); setEntries([]); setTags([]); setStickers([]); setPendingStickerDeletes(0); setUnlocked(false); setBusy(false); setProgress("");
     void refreshVault();
   }, [demo, clearUrls, refreshVault]);
   useEffect(() => { const lifecycle = epoch; const session = vault; void refreshVault(); return () => { lifecycle.current++; session.current = null; clearUrls(); }; }, [refreshVault, clearUrls]);
@@ -85,13 +91,17 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
       if (generation !== epoch.current) { urls.forEach((url) => URL.revokeObjectURL(url)); return; }
       clearUrls(); objectUrls.current = urls; vault.current = session; row.current = session.row;
       setEntries(session.document.entries.map((entry) => ({ ...entry, sticker: local.find((item) => item.id === entry.sticker_id) ?? null })).sort((a, b) => b.date.localeCompare(a.date)));
-      setTags(session.document.tags); setStickers(local); setUnlocked(true);
+      setTags(session.document.tags); setStickers(local); setPendingStickerDeletes(session.document.pendingStickerDeletes?.length ?? 0); setUnlocked(true);
     } catch (error) { urls.forEach((url) => URL.revokeObjectURL(url)); throw error; }
   }
   async function openVault(operation: () => Promise<UnlockedVault>) {
     if (busy) return;
     const generation = epoch.current; setBusy(true); setError(""); setProgress("Unlocking…");
-    try { await hydrate(await operation(), generation); }
+    try {
+      const session = await operation();
+      if (generation !== epoch.current) return;
+      await hydrate(await cleanupDeletedStickers(session), generation);
+    }
     catch (error) {
       if (generation === epoch.current) {
         setError(error instanceof Error ? error.message : "Unable to unlock your journal.");
@@ -133,12 +143,13 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
   const uploadSticker = useCallback(async (file: File, name?: string): Promise<Sticker> => {
     if (writing.current) throw new Error("Wait for the current save to finish.");
     if (!file.size || file.size > MAX_STICKER_BYTES) throw new Error("Choose a sticker smaller than 3 MB.");
-    const format = stickerFormat(new Uint8Array(await file.slice(0, 4096).arrayBuffer()));
-    if (!format) throw new Error("Use PNG, JPG, WebP, GIF, or WebM.");
     const generation = epoch.current; const session = vault.current;
     if (!demo && !session) throw new Error("Unlock your journal before uploading.");
     writing.current = true;
     try {
+      const format = stickerFormat(new Uint8Array(await file.slice(0, 4096).arrayBuffer()));
+      if (!format) throw new Error("Use PNG, JPG, WebP, GIF, or WebM.");
+      if (generation !== epoch.current) throw new Error("Journal locked. Unlock to upload your sticker.");
       const id = crypto.randomUUID();
       const sticker: Sticker = { id, user_id: demo ? "demo" : profile.id, name: (name?.trim() || stickerFileName(file.name)).slice(0, 60), mime_type: format.mime, size_bytes: file.size, storage_path: `${profile.id}/${crypto.randomUUID()}.bin`, created_at: new Date().toISOString() };
       let next: UnlockedVault | null = null;
@@ -152,8 +163,45 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
       setStickers((current) => [sticker, ...current]); return sticker;
     } finally { if (generation === epoch.current) writing.current = false; }
   }, [demo, profile.id]);
+  const remove = useCallback(async (kind: "entry" | "sticker", id: string) => {
+    if (writing.current) throw new Error("Wait for the current save to finish.");
+    const generation = epoch.current; const session = vault.current;
+    if (!demo && !session) throw new Error("Unlock your journal before deleting.");
+    writing.current = true;
+    try {
+      const local: VaultDocument = { version: 1, entries, tags, stickers, migration: { fingerprint: "", legacyPaths: [] } };
+      const next = session ? await (kind === "entry" ? deleteVaultEntry(session, id) : deleteVaultSticker(session, id)) : null;
+      const document = next?.document ?? (kind === "entry" ? withoutEntry(local, id) : withoutSticker(local, id));
+      if (generation !== epoch.current) throw new Error("Journal locked. Unlock to see your latest data.");
+      if (next) { vault.current = next; row.current = next.row; }
+      const remaining = stickers.filter((sticker) => document.stickers.some((item) => item.id === sticker.id));
+      for (const sticker of stickers) {
+        if (sticker.preview_url && !remaining.includes(sticker)) {
+          URL.revokeObjectURL(sticker.preview_url);
+          objectUrls.current = objectUrls.current.filter((url) => url !== sticker.preview_url);
+        }
+      }
+      setEntries(document.entries.map((entry) => ({ ...entry, sticker: remaining.find((item) => item.id === entry.sticker_id) ?? null })));
+      setTags(document.tags); setStickers(remaining); setPendingStickerDeletes(demo ? 0 : document.pendingStickerDeletes?.length ?? 0);
+    } finally { if (generation === epoch.current) writing.current = false; }
+  }, [demo, entries, tags, stickers]);
+  const deleteEntry = useCallback((id: string) => remove("entry", id), [remove]);
+  const deleteSticker = useCallback((id: string) => remove("sticker", id), [remove]);
+  const retryStickerDeletes = useCallback(async () => {
+    if (writing.current) throw new Error("Wait for the current save to finish.");
+    const generation = epoch.current; const session = vault.current;
+    if (!session) throw new Error("Unlock your journal to retry.");
+    writing.current = true;
+    try {
+      const next = await cleanupDeletedStickers(session);
+      if (generation !== epoch.current) return;
+      vault.current = next; row.current = next.row;
+      setPendingStickerDeletes(next.document.pendingStickerDeletes?.length ?? 0);
+      if (next.document.pendingStickerDeletes?.length) throw new Error("File cleanup is still pending. Try again later, or lock and unlock to reload your journal.");
+    } finally { if (generation === epoch.current) writing.current = false; }
+  }, []);
   const encrypted = !demo && unlocked && vault.current?.row.migration_stage === "complete";
-  const value = useMemo(() => ({ entries, tags, today, timezone, demo, email, save, profile, stickers, rename, uploadSticker, encrypted, lock }), [entries, tags, today, timezone, demo, email, save, profile, stickers, rename, uploadSticker, encrypted, lock]);
+  const value = useMemo(() => ({ entries, tags, today, timezone, demo, email, save, profile, stickers, rename, uploadSticker, encrypted, lock, deleteEntry, deleteSticker, pendingStickerDeletes, retryStickerDeletes }), [entries, tags, today, timezone, demo, email, save, profile, stickers, rename, uploadSticker, encrypted, lock, deleteEntry, deleteSticker, pendingStickerDeletes, retryStickerDeletes]);
   return <JournalContext.Provider value={value}>{demo || unlocked ? children : <VaultGate stage={stage} busy={busy} error={error} progress={progress} username={profile.username} onRetry={() => void refreshVault()}
     onSetup={(passphrase, recovery) => openVault(() => initializeVault(profile.id, passphrase, recovery, setProgress))}
     onUnlock={(passphrase) => openVault(async () => { if (!row.current) throw new Error("Reload to check your vault."); return unlockVault(row.current, passphrase, setProgress); })}

@@ -21,6 +21,7 @@ before(async () => {
     await db.query("insert into public.stickers(user_id,name,storage_path,mime_type,size_bytes) values ($1,'private sticker',$2,'image/webp',50)", [ALICE,path]);
   });
   await db.exec(await readFile("supabase/migrations/202609180001_encrypted_vault.sql", "utf8"));
+  await db.exec(await readFile("supabase/migrations/202609180002_sticker_deletion.sql", "utf8"));
   ({ key, config } = await createKeys("a long unique passphrase for a test", newRecoveryKey(), ALICE));
 });
 after(async () => { await db?.close(); });
@@ -90,5 +91,26 @@ test("encrypted saves use revisions to reject lost updates and malformed envelop
     await assert.rejects(db.query("select public.save_encrypted_vault($1,4,$2::jsonb)", [ALICE,JSON.stringify({ ...cipher, iv: "invalid" })]), /check constraint/);
     assert.equal((await row()).revision,4);
     assert.deepEqual(await decryptJSON((await row()).ciphertext,key,ALICE), { note: "only the user can decrypt this" });
+  });
+});
+
+test("encrypted sticker deletion allows only the owner after migration completes", async () => {
+  const owned = `${ALICE}/55555555-5555-4555-8555-555555555555.bin`;
+  const pending = `${BOB}/66666666-6666-4666-8666-666666666666.bin`;
+  await asUser(ALICE, async () => {
+    await db.query("insert into storage.objects(bucket_id,name) values ('moodgrid-vault',$1)", [owned]);
+  });
+  await asUser(BOB, async () => {
+    assert.equal((await db.query("delete from storage.objects where name=$1 returning name", [owned])).rows.length, 0);
+    await db.query("insert into storage.objects(bucket_id,name) values ('moodgrid-vault',$1)", [pending]);
+    // No completed vault: encrypted migration copies cannot be removed.
+    assert.equal((await db.query("delete from storage.objects where name=$1 returning name", [pending])).rows.length, 0);
+  });
+  await db.exec("set role anon");
+  try { await assert.rejects(db.query("delete from storage.objects where name=$1", [owned]), /permission denied/); }
+  finally { await db.exec("reset role"); }
+  await asUser(ALICE, async () => {
+    assert.equal((await db.query("delete from storage.objects where name=$1 returning name", [owned])).rows.length, 1);
+    assert.equal((await db.query("delete from storage.objects where name=$1 returning name", [pending])).rows.length, 0);
   });
 });

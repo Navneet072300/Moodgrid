@@ -2,6 +2,7 @@
 from pathlib import Path
 
 checks = {
+    "202609180002": "not exists (select 1 from pg_policies where schemaname = 'storage' and tablename = 'objects' and policyname = 'Delete own encrypted MoodGrid stickers')",
     "202609180001": "to_regclass('public.encrypted_vaults') is null",
     "202609160001": "to_regclass('public.entries') is null",
     "202609160002": "to_regclass('public.summary_rate_limits') is null",

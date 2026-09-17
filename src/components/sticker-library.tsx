@@ -4,19 +4,23 @@ import { LoaderCircle, Search, Upload } from "lucide-react";
 import { motion } from "framer-motion";
 import { useJournal } from "./journal-provider";
 import { StickerImage } from "./sticker-image";
+import { DeleteButton } from "./delete-button";
 import { STICKER_ACCEPT } from "@/lib/stickers";
 import type { Sticker } from "@/lib/types";
 
-export function StickerLibrary({ value, onSelect, disabled = false }: { value?: string | null; onSelect?: (sticker: Sticker) => void; disabled?: boolean }) {
-  const { stickers, uploadSticker, demo } = useJournal();
+export function StickerLibrary({ value, onSelect, onRemoved, disabled = false }: { value?: string | null; onSelect?: (sticker: Sticker) => void; onRemoved?: (id: string) => void; disabled?: boolean }) {
+  const { stickers, entries, uploadSticker, deleteSticker, pendingStickerDeletes, retryStickerDeletes, demo } = useJournal();
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const [message, setMessage] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const input = useRef<HTMLInputElement>(null);
+  const blocked = busy || deleting || retrying || disabled;
   const choices = stickers.filter((sticker) => sticker.name.toLowerCase().includes(query.toLowerCase().trim()));
   async function upload(files: File[]) {
-    if (busy || disabled || !files.length) return;
+    if (blocked || !files.length) return;
     setBusy(true); setErrors([]); let count = 0; const failures: string[] = [];
     for (const file of files.slice(0, 20)) {
       setMessage(`Uploading ${file.name}…`);
@@ -27,15 +31,33 @@ export function StickerLibrary({ value, onSelect, disabled = false }: { value?: 
     setErrors(failures); setMessage(count ? `${count} sticker${count === 1 ? "" : "s"} added to your library.` : ""); setBusy(false);
     if (input.current) input.current.value = "";
   }
-  return <div className="sticker-library" aria-busy={busy}>
-    <input ref={input} className="sr-only" type="file" accept={STICKER_ACCEPT} multiple disabled={busy || disabled} onChange={(event) => void upload(Array.from(event.target.files ?? []))} aria-label="Upload sticker files" />
-    <button type="button" className="sticker-upload" disabled={busy || disabled} onClick={() => input.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void upload(Array.from(event.dataTransfer.files)); }}>
+  async function remove(sticker: Sticker) {
+    setDeleting(true); setErrors([]); setMessage("");
+    try { await deleteSticker(sticker.id); onRemoved?.(sticker.id); setMessage("Sticker removed from your library."); }
+    finally { setDeleting(false); }
+  }
+  async function retry() {
+    setRetrying(true); setErrors([]);
+    try { await retryStickerDeletes(); setMessage("Sticker file cleanup complete."); }
+    catch (error) { setErrors([error instanceof Error ? error.message : "File cleanup is still pending."]); }
+    finally { setRetrying(false); }
+  }
+  return <div className="sticker-library" aria-busy={busy || deleting || retrying}>
+    <input ref={input} className="sr-only" type="file" accept={STICKER_ACCEPT} multiple disabled={blocked} onChange={(event) => void upload(Array.from(event.target.files ?? []))} aria-label="Upload sticker files" />
+    <button type="button" className="sticker-upload" disabled={blocked} onClick={() => input.current?.click()} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void upload(Array.from(event.dataTransfer.files)); }}>
       {busy ? <LoaderCircle size={24} className="animate-spin" /> : <Upload size={24} />}<strong>{busy ? "Adding your stickers…" : "Upload stickers"}</strong><span>Choose files or drop them here</span><small>PNG, JPG, WebP, GIF or WebM · up to 3 MB each</small>
     </button>
     <p className="sticker-hint">Export .tgs files and sticker packs to supported files first.{demo ? " Demo uploads last only during this visit." : " Files are encrypted on your device before upload."}</p>
     {message && <p role="status" className="text-sm text-mint">{message}</p>}{errors.length > 0 && <div role="alert" className="error-message">{errors.map((error) => <p key={error}>{error}</p>)}</div>}
+    {pendingStickerDeletes > 0 && <div className="sticker-cleanup" role="status"><span>{pendingStickerDeletes} encrypted file{pendingStickerDeletes === 1 ? "" : "s"} awaiting removal.</span><button type="button" disabled={blocked} onClick={() => void retry()}>{retrying ? "Retrying…" : "Retry cleanup"}</button></div>}
     {stickers.length > 0 && <div className="input-icon emoji-search"><Search size={16} /><input aria-label="Search your stickers" placeholder="Find a sticker…" value={query} onChange={(event) => setQuery(event.target.value)} /></div>}
-    <div className="sticker-grid">{choices.map((sticker) => onSelect ? <motion.button type="button" key={sticker.id} disabled={disabled || busy} aria-pressed={value === sticker.id} onClick={() => onSelect(sticker)} className={`sticker-tile ${value === sticker.id ? "selected" : ""}`} title={sticker.name} whileHover={{ y: -3 }} whileTap={{ scale: 0.92 }} transition={{ type: "spring", stiffness: 400, damping: 18 }}><StickerImage sticker={sticker} size={80} /><span>{sticker.name}</span></motion.button> : <div key={sticker.id} className="sticker-tile"><StickerImage sticker={sticker} size={80} /><span>{sticker.name}</span></div>)}</div>
+    <div className="sticker-grid">{choices.map((sticker) => {
+      const uses = entries.filter((entry) => entry.sticker_id === sticker.id).length;
+      return <motion.div key={sticker.id} className={`sticker-tile ${value === sticker.id ? "selected" : ""}`} layout transition={{ type: "spring", stiffness: 400, damping: 25 }}>
+        {onSelect ? <motion.button type="button" disabled={blocked} aria-pressed={value === sticker.id} onClick={() => onSelect(sticker)} className="sticker-select" title={sticker.name} whileHover={{ y: -3 }} whileTap={{ scale: 0.92 }}><StickerImage sticker={sticker} size={80} /><span>{sticker.name}</span></motion.button> : <div className="sticker-select"><StickerImage sticker={sticker} size={80} /><span>{sticker.name}</span></div>}
+        <DeleteButton label={`Delete sticker ${sticker.name}`} title="Delete this sticker?" description={`“${sticker.name}” will be removed from your library and its encrypted file deleted. This cannot be undone.`} iconOnly disabled={blocked} blockedReason={uses ? `Used in ${uses} moment${uses === 1 ? "" : "s"}. Change or delete those moments first.` : undefined} onDelete={() => remove(sticker)} />
+      </motion.div>;
+    })}</div>
     {stickers.length > 0 && !choices.length && <p className="text-sm text-muted">No stickers match this search.</p>}
   </div>;
 }

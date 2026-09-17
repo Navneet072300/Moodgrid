@@ -1,0 +1,35 @@
+"use client";
+import { EntryVisual } from "./sticker-image";
+import { useMemo, useState } from "react";
+import { Activity, Flame, Smile } from "lucide-react";
+import { CartesianGrid, Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { useJournal } from "./journal-provider";
+import { InsightsFilters } from "./insights-filters";
+import { insightRange, type InsightSelection } from "@/lib/insight-ranges";
+import { WeeklySummary } from "./weekly-summary";
+import { formatDate } from "@/lib/dates";
+import { averageMood, currentStreak, moodDistribution, moodTrend, moodTrendBucket, tagDistribution } from "@/lib/insights";
+
+const SCORE_LABELS: Record<number, string> = { 1: "Very low", 2: "Low", 3: "Okay", 4: "Good", 5: "Great" };
+export function InsightsView() {
+  const { entries, today } = useJournal();
+  const [selection, setSelection] = useState<InsightSelection>(30);
+  const range = useMemo(() => insightRange(selection, entries, today), [selection, entries, today]);
+  const { from, to, days } = range;
+  const period = useMemo(() => entries.filter((entry) => entry.date >= from && entry.date <= to), [entries, from, to]);
+  const distribution = useMemo(() => moodDistribution(period), [period]);
+  const tags = useMemo(() => tagDistribution(period), [period]);
+  const trend = useMemo(() => moodTrend(period, to, days), [period, to, days]);
+  const average = averageMood(period);
+  const bucket = moodTrendBucket(days);
+  const rangeLabel = `${formatDate(from, { month: "short", day: "numeric", year: "numeric" })} – ${formatDate(to, { month: "short", day: "numeric", year: "numeric" })}`;
+  return <main className="page-shell"><div className="page-heading"><div><h1>Insights</h1></div></div><InsightsFilters selection={selection} range={range} today={today} onChange={setSelection} />
+    <div className="stats-grid"><div className="card stat-card"><Activity size={19} /><span>Average mood</span><strong>{average?.toFixed(1) ?? "—"}<small>{average === null ? "Add a mood score to a check-in" : `out of 5 · scored check-ins`}</small></strong></div><div className="card stat-card"><Flame size={19} /><span>Current logging streak</span><strong>{currentStreak(entries, today)}<small>days in a row · through today 🔥</small></strong></div><div className="card stat-card"><Smile size={19} /><span>Most frequent feeling</span><strong>{distribution[0] ? <EntryVisual entry={distribution[0]} size={40} /> : "○"}<small>{distribution[0] ? `${distribution[0].label} · ${distribution[0].count} days` : "Your feelings will show up here"}</small></strong></div></div>
+    <section className="card chart-card"><div className="section-heading"><div><h2>Mood trend</h2><p>{bucket === 1 ? "Your daily mood" : bucket === 7 ? "Weekly average mood" : `${bucket}-day average mood`} · {rangeLabel}</p></div><span className="quiet-badge">{period.length} check-ins</span></div>
+      {period.length ? <><div className="chart-container" role="img" aria-label={`Mood trend from ${rangeLabel} (${days} ${days === 1 ? "day" : "days"}). ${average === null ? "No scored check-ins yet." : `Average ${average.toFixed(1)} out of 5.`} A data table follows.`}><ResponsiveContainer width="100%" height="100%"><LineChart data={trend} margin={{ top: 12, right: 15, bottom: 5, left: 0 }} accessibilityLayer><CartesianGrid stroke="#35402e" strokeDasharray="3 6" vertical={false} /><XAxis dataKey="label" tick={{ fill: "#a1b492", fontSize: 12 }} axisLine={false} tickLine={false} minTickGap={45} dy={10} /><YAxis domain={[1, 5]} ticks={[1, 2, 3, 4, 5]} tickFormatter={(value: number) => SCORE_LABELS[value]} tick={{ fill: "#a1b492", fontSize: 12 }} axisLine={false} tickLine={false} width={61} /><Tooltip content={({ active, payload, label }) => active && payload?.length ? <div className="chart-tooltip"><p className="mb-2 text-muted">{String(label)}</p><strong>{Number(payload[0].value).toFixed(1)} / 5</strong></div> : null} /><Line type="monotone" dataKey="score" name="Mood" stroke="#bcf7a2" strokeWidth={2.5} dot={{ r: 3, fill: "#bcf7a2", stroke: "#24301d", strokeWidth: 2 }} activeDot={{ r: 6, strokeWidth: 3, stroke: "#34442b" }} connectNulls={false} isAnimationActive={false} /></LineChart></ResponsiveContainer></div><details className="mt-3 text-xs text-muted"><summary className="inline-block cursor-pointer py-1">View chart data</summary><div className="mt-3 max-h-64 overflow-auto"><table className="w-full text-left text-sm"><caption className="sr-only">Mood trend values</caption><thead><tr><th className="py-2">Date</th><th>Average score</th><th>Check-ins</th></tr></thead><tbody>{trend.map((point) => <tr key={point.date} className="border-t border-[#303b29]"><td className="py-2">{point.label}</td><td>{point.score ?? "No score"}</td><td>{point.count}</td></tr>)}</tbody></table></div></details></> : <div className="empty-state"><span>🌱</span><h3>No check-ins in this window.</h3><p>Try a wider date range or add a check-in to your journal.</p></div>}
+      <p className="chart-note">Quick moods suggest a 1–5 score you can change. Other emojis and stickers use your optional score. Check-ins without a score stay blank.</p>
+    </section>
+    <div className="insights-lower"><section className="card chart-card"><div className="section-heading"><div><h2>Mood distribution</h2></div></div>{distribution.length ? <div className="distribution-layout"><div className="distribution-chart" role="img" aria-label="Mood distribution donut chart. Counts are listed alongside."><ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={distribution} dataKey="count" nameKey="label" innerRadius="62%" outerRadius="87%" paddingAngle={3} stroke="none" isAnimationActive={false}>{distribution.map((mood) => <Cell key={mood.key} fill={mood.color} />)}</Pie><Tooltip content={({ active, payload }) => active && payload?.length ? <div className="chart-tooltip">{String(payload[0].name)}: {Number(payload[0].value)} check-ins</div> : null} /></PieChart></ResponsiveContainer></div><ul className="distribution-list">{distribution.map((mood) => <li key={mood.key}><i className="legend-square shrink-0" style={{ backgroundColor: mood.color }} /><span aria-hidden="true"><EntryVisual entry={mood} size={24} /></span><span>{mood.label}</span><strong>{mood.count}</strong></li>)}</ul></div> : <div className="empty-state"><span>🎨</span><p>Your feelings will bring this chart to life.</p></div>}</section>
+    <section className="card chart-card"><div className="section-heading"><div><h2>Top tags</h2><p>Your most-used tags in this period.</p></div></div>{tags.length ? <div className="tags-chart">{tags.slice(0, 6).map((tag) => <div key={tag.name}><div className="tag-stat-top"><span>#{tag.name}</span><span>{tag.count} {tag.count === 1 ? "day" : "days"}</span></div><div className="tag-bar"><div style={{ width: `${tag.count / tags[0].count * 100}%` }} /></div></div>)}</div> : <div className="empty-state"><span>🏷️</span><p>Add a tag to a check-in to see what’s been part of your days.</p></div>}</section></div><div className="insights-summary"><WeeklySummary /></div>
+  </main>;
+}

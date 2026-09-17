@@ -1,0 +1,1 @@
+export default function Loading() { return <main className="page-shell" aria-busy="true" aria-label="Loading journal"><div className="loading-line" /><div className="card mt-8 h-80 animate-pulse" /><p className="mt-6 text-center text-sm text-muted">Opening a little space for you…</p></main>; }

@@ -24,7 +24,7 @@ The encryption migration is [`202609180001_encrypted_vault.sql`](supabase/migrat
 
 ## Authentication
 
-In Supabase Authentication, keep Email enabled and allow signup. Set the Site URL to the application origin and allow `/auth/callback` and `/auth/confirm` on localhost and production. A production SMTP provider is needed for reliable delivery.
+In Supabase Authentication, keep Email enabled and allow signup. Set the Site URL to the application origin and allow `/auth/callback` and `/auth/confirm` on localhost and production. Configure custom SMTP before inviting public users: the built-in sender is restricted to team addresses and a small project-wide email quota. See [production email setup](docs/auth-email-setup.md) for the exact configuration and troubleshooting steps.
 
 The Magic Link email template can use:
 

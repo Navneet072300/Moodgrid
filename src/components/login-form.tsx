@@ -3,6 +3,25 @@ import { useState, type FormEvent } from "react";
 import { ArrowRight, Check, LoaderCircle, Mail } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 
+function signInError(error: { code?: string; status?: number }): string {
+  switch (error.code) {
+    case "over_email_send_rate_limit":
+      return "Sign-in emails are temporarily limited. Please try again later.";
+    case "over_request_rate_limit":
+      return "Too many sign-in requests. Please try again later.";
+    case "email_address_not_authorized":
+      return "Email sign-in isn't available for this address yet. Please contact the app owner.";
+    case "signup_disabled":
+      return "New accounts aren't available right now. Please try again later.";
+    case "email_address_invalid":
+      return "Please enter a valid email address.";
+    default:
+      return error.status === 429
+        ? "Too many sign-in requests. Please try again later."
+        : "We couldn't send your link. Please try again later.";
+  }
+}
+
 export function LoginForm({ configured, expired }: { configured: boolean; expired: boolean }) {
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<"idle" | "loading" | "sent">("idle");
@@ -14,7 +33,7 @@ export function LoginForm({ configured, expired }: { configured: boolean; expire
     try {
       const supabase = createClient();
       const { error: authError } = await supabase.auth.signInWithOtp({ email: email.trim(), options: { emailRedirectTo: `${window.location.origin}/auth/callback` } });
-      if (authError) { setError(authError.status === 429 ? "Please wait a minute before requesting another link." : "We couldn't send your link. Check your email address and try again."); setStatus("idle"); return; }
+      if (authError) { setError(signInError(authError)); setStatus("idle"); return; }
       setStatus("sent");
     } catch { setError("Couldn't connect. Please check your connection and try again."); setStatus("idle"); }
   }

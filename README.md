@@ -18,11 +18,13 @@ Set `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, and `NEX
 
 ## Database setup and upgrade
 
-Run [`supabase/setup.sql`](supabase/setup.sql) in the project's Supabase SQL editor. It supports a fresh database or the earlier MoodGrid schema and is safe to repeat after a successful run. It does not discard legacy journal data during installation. Alternatively, apply the eight ordered source migrations with the Supabase CLI, reconciling migration history if SQL was previously applied manually. Regenerate the SQL-editor bundle with `python3 scripts/generate-setup.py` after editing source migrations.
+Run [`supabase/setup.sql`](supabase/setup.sql) in the project's Supabase SQL editor. It supports a fresh database or the earlier MoodGrid schema and is safe to repeat after a successful run. It does not discard legacy journal data during installation. Alternatively, apply the nine ordered source migrations with the Supabase CLI, reconciling migration history if SQL was previously applied manually. Regenerate the SQL-editor bundle with `python3 scripts/generate-setup.py` after editing source migrations.
 
 The encryption migration is [`202609180001_encrypted_vault.sql`](supabase/migrations/202609180001_encrypted_vault.sql). It requires the preceding profile, emoji, and sticker migrations. Deploy the application and install the database migration together: it deliberately freezes old plaintext writes, and the new application fails closed if encrypted storage is unavailable. An older application version cannot write after this migration is applied.
 
 **Upgrading an existing encrypted installation:** run [`202609180002_sticker_deletion.sql`](supabase/migrations/202609180002_sticker_deletion.sql) in Supabase SQL Editor to enable owner-only deletion of encrypted sticker files. It does not delete existing data. This migration has not been applied to the hosted project by this code change; a Git push does not execute SQL. Without it, removed stickers stay in an encrypted cleanup queue until the policy is installed and cleanup is retried.
+
+**Username generation upgrade:** run [`202609180003_username_variety.sql`](supabase/migrations/202609180003_username_variety.sql) to give new accounts more varied names. This replaces the signup generator and preserves all existing usernames, including custom names. It also needs to be applied separately in the hosted database; pushing the code does not install it.
 
 ## Authentication
 
@@ -36,7 +38,7 @@ The Magic Link email template can use:
 
 The token-hash route allows opening the link on another device. The PKCE callback also supports Supabase's default flow in the initiating browser. Email login establishes account access; it never supplies the journal's decryption key.
 
-Each account has a private profile with its email and an automatically generated unique username. Users may edit only their own username. Email follows Supabase Auth. User IDs remain stable when usernames change.
+Each account has a private profile with its email and an automatically generated unique username. New profiles rotate through 128 prefixes (excluding `jazzy` and `cosmic`), paired with one of 128 animals and a random eight-character suffix. Prefixes cycle after the pool is used; the database UNIQUE constraint and collision retry ensure complete usernames remain distinct. A private sequence allocates prefixes, and returning logins update only account metadata without consuming a prefix or changing the username. Users may edit only their own username. Email follows Supabase Auth. User IDs remain stable when usernames change.
 
 ## Encryption design
 

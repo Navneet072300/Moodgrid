@@ -4,20 +4,22 @@ Supabase's default email sender is for testing. It permits only project team rec
 
 ## Configure a sender
 
-Use an SMTP provider and a verified sender. For example, Resend requires a verified domain and an API key. You need control of the domain's DNS; the app itself can stay on its Vercel address.
+The production website is `https://www.moodgrid.fun`. For Resend, add the sending domain **`moodgrid.fun`** and publish the DNS records Resend provides. Wait until its status is **Verified** before sending. Domain verification for email is separate from connecting the website to Vercel. [Verified sending domains](https://resend.com/docs/dashboard/domains/introduction).
 
 In Supabase, open **Authentication → Email / Emails → SMTP Settings**, enable custom SMTP, and enter your provider's settings. For Resend:
 
 | Setting | Value |
 | --- | --- |
 | Sender name | `MoodGrid` |
-| Sender email | An address on your verified domain, such as `hello@your-domain.com` |
+| Sender email | `hello@moodgrid.fun`, after verifying `moodgrid.fun` in Resend |
 | Host | `smtp.resend.com` |
 | Port | `465` |
 | Username | `resend` |
 | Password | Your Resend API key |
 
 Save the API key in Supabase's SMTP password field, not in the repository or a `NEXT_PUBLIC_` variable. [Resend setup instructions](https://resend.com/docs/send-with-supabase-smtp).
+
+A `550` rejection saying `gmail.com` is not verified means the sender address still uses Gmail. Replace that sender with `hello@moodgrid.fun` after domain verification. Recipients may still use Gmail or other email providers.
 
 In **Authentication → Rate Limits**, review the email-sending quota after configuring SMTP. Supabase documents an initial custom-SMTP limit of 30 messages per hour; choose a limit that fits your provider's allowance and expected traffic. The per-user resend interval is separate. Keep email confirmation enabled and allow new signups. [Rate-limit configuration](https://supabase.com/docs/guides/auth/rate-limits).
 
@@ -27,12 +29,14 @@ Under **Authentication → URL Configuration**, set:
 
 ```text
 Site URL:
-https://moodgrid-psi.vercel.app
+https://www.moodgrid.fun
 
 Redirect URLs:
-https://moodgrid-psi.vercel.app/auth/callback
-https://moodgrid-psi.vercel.app/auth/confirm
+https://www.moodgrid.fun/auth/callback
+https://www.moodgrid.fun/auth/confirm
 ```
+
+In Vercel, set `NEXT_PUBLIC_SITE_URL=https://www.moodgrid.fun` as **Config** for Production, then redeploy to apply changed environment values. Keep local development's `.env.local` origin separate. If the apex `moodgrid.fun` is also attached to Vercel, redirect it to the canonical `www.moodgrid.fun` domain.
 
 Add localhost or preview callbacks separately when needed. The app requests `/auth/callback` on the browser's current origin. The README's optional token-hash email template uses the configured Site URL and `/auth/confirm`. [Supabase redirect configuration](https://supabase.com/docs/guides/auth/redirect-urls).
 

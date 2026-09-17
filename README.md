@@ -2,6 +2,8 @@
 
 Next.js 15 App Router, strict TypeScript, Supabase magic-link authentication, Tailwind CSS, Framer Motion, Recharts, and browser-side journal encryption. Deploy-ready on Vercel.
 
+Production origin: `https://www.moodgrid.fun`. The [email setup guide](docs/auth-email-setup.md) lists the matching Supabase redirects and Resend sender domain.
+
 ## Run
 
 ```sh

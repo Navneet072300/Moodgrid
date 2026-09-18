@@ -205,3 +205,21 @@ a { text-decoration: none; }
 .sticker-tile > .delete-icon { align-self: flex-end; margin-right: 2px; }
 .sticker-cleanup { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border: 1px solid #67583c; border-radius: 10px; color: #decea9; font-size: 12px; }
 .sticker-cleanup button { min-height: 44px; text-decoration: underline; text-underline-offset: 3px; }
+
+.calendar-cell.is-closed { cursor: default; }
+.missed-day-message { padding: 60px 26px 38px; text-align: center; }
+.missed-day-message > span { font-size: 38px; }
+.missed-day-message h2 { font-size: 24px; margin: 20px 0 12px; }
+.missed-day-message p { color: var(--muted); font-size: 14px; line-height: 1.7; }
+.streak-dialog { position: fixed; width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); overflow-y: auto; padding: 36px 30px 28px; border: 1px solid #46503f; border-radius: 26px; color: var(--text); background: radial-gradient(ellipse at top, #31432890, transparent 70%), var(--surface); text-align: center; box-shadow: 0 24px 90px #0008; }
+.streak-dialog::backdrop { background: #090d09b8; backdrop-filter: blur(7px); }
+.streak-dialog .dialog-close { width: 44px; height: 44px; right: 7px; top: 7px; }
+.streak-dialog-art { width: 102px; height: 102px; margin: 8px auto 25px; display: grid; place-items: center; border-radius: 34px; font-size: 58px; background: #b8db9420; border: 1px solid #b8db942a; }
+.streak-dialog-kicker { display: block; color: #c6deaf; font-size: 11px; letter-spacing: 2px; margin-bottom: 13px; }
+.streak-dialog h2 { font-size: 29px; line-height: 1.2; letter-spacing: -.6px; text-wrap: balance; }
+.streak-dialog p { color: #b4bfad; font-size: 14px; line-height: 1.8; margin: 17px 0 25px; text-wrap: pretty; }
+.streak-dialog .button-primary { width: 100%; }
+.streak-pause { background: radial-gradient(ellipse at top, #38435370, transparent 70%), var(--surface); }
+.streak-pause .streak-dialog-art { background: #a9b7d41a; border-color: #a9b7d429; }
+.streak-pause .streak-dialog-kicker { color: #b6c4db; }
+@media (max-width: 540px) { .streak-dialog { padding: 30px 22px 24px; }.streak-dialog h2 { font-size: 26px; } }

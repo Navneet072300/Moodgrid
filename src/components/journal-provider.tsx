@@ -4,6 +4,8 @@ import { updateUsername } from "@/app/actions/profile";
 import { MAX_STICKER_BYTES, stickerFormat, stickerFileName } from "@/lib/stickers";
 import { getMood } from "@/lib/moods";
 import { todayInTimezone } from "@/lib/dates";
+import { assertCheckInDate } from "@/lib/check-in-policy";
+import { getStreakNotice, mergeStreakReceipts, type StreakNotice } from "@/lib/streak-notices";
 import { entrySchema, usernameSchema } from "@/lib/validation";
 import { createClient } from "@/lib/supabase/client";
 import { addEncryptedSticker, cleanupDeletedStickers, deleteVaultEntry, deleteVaultSticker, encryptedFile, initializeVault, loadVault, persistVault, recoverVault, unlockVault, type UnlockedVault } from "@/lib/vault/store";
@@ -22,6 +24,8 @@ type JournalContextValue = {
   deleteSticker: (id: string) => Promise<void>;
   pendingStickerDeletes: number;
   retryStickerDeletes: () => Promise<void>;
+  streakNotice: StreakNotice | null;
+  dismissStreakNotice: (id: string) => Promise<void>;
 };
 const JournalContext = createContext<JournalContextValue | null>(null);
 export function JournalProvider({ children, initialEntries, initialTags, initialToday, email, initialProfile, demo = false }: {
@@ -34,6 +38,8 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
   const [pendingStickerDeletes, setPendingStickerDeletes] = useState(0);
   const [today, setToday] = useState(initialToday);
   const [timezone, setTimezone] = useState("UTC");
+  const [clockReady, setClockReady] = useState(false);
+  const [seenStreakEvents, setSeenStreakEvents] = useState<string[]>([]);
   const [unlocked, setUnlocked] = useState(false);
   const [stage, setStage] = useState<"loading" | "setup" | "locked" | "error">("loading");
   const [busy, setBusy] = useState(false);
@@ -44,6 +50,8 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
   const epoch = useRef(0);
   const writing = useRef(false);
   const objectUrls = useRef<string[]>([]);
+  const noticeReceipts = useRef<string[]>([]);
+  const withReceipts = useCallback((document: VaultDocument): VaultDocument => ({ ...document, seenStreakEvents: mergeStreakReceipts(document.seenStreakEvents, noticeReceipts.current) }), []);
   const clearUrls = useCallback(() => { objectUrls.current.forEach((url) => URL.revokeObjectURL(url)); objectUrls.current = []; }, []);
   const refreshVault = useCallback(async () => {
     if (demo) return;
@@ -55,6 +63,7 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
   const lock = useCallback(() => {
     if (demo) return;
     epoch.current++; vault.current = null; row.current = null; writing.current = false;
+    noticeReceipts.current = []; setSeenStreakEvents([]);
     clearUrls(); setEntries([]); setTags([]); setStickers([]); setPendingStickerDeletes(0); setUnlocked(false); setBusy(false); setProgress("");
     void refreshVault();
   }, [demo, clearUrls, refreshVault]);
@@ -62,7 +71,7 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
   useEffect(() => { if (!demo && initialProfile) setProfile(initialProfile); }, [demo, initialProfile]);
   useEffect(() => {
     const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    setTimezone(zone); setToday(todayInTimezone(zone));
+    setTimezone(zone); setToday(todayInTimezone(zone)); setClockReady(true);
     // The timezone is needed only on this device, not in an account cookie.
     document.cookie = "moodgrid-timezone=; Path=/; Max-Age=0; SameSite=Lax";
     const timer = window.setInterval(() => setToday(todayInTimezone(zone)), 30_000);
@@ -90,6 +99,7 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
       }
       if (generation !== epoch.current) { urls.forEach((url) => URL.revokeObjectURL(url)); return; }
       clearUrls(); objectUrls.current = urls; vault.current = session; row.current = session.row;
+      noticeReceipts.current = session.document.seenStreakEvents ?? []; setSeenStreakEvents(noticeReceipts.current);
       setEntries(session.document.entries.map((entry) => ({ ...entry, sticker: local.find((item) => item.id === entry.sticker_id) ?? null })).sort((a, b) => b.date.localeCompare(a.date)));
       setTags(session.document.tags); setStickers(local); setPendingStickerDeletes(session.document.pendingStickerDeletes?.length ?? 0); setUnlocked(true);
     } catch (error) { urls.forEach((url) => URL.revokeObjectURL(url)); throw error; }
@@ -129,17 +139,18 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
     writing.current = true;
     try {
       const source = session?.document.entries ?? entries;
+      assertCheckInDate(parsed.date, source, timezone);
       const existing = source.find((value) => value.date === parsed.date);
       const saved: Entry = { id: existing?.id ?? crypto.randomUUID(), user_id: demo ? "demo" : profile.id, date: parsed.date, emoji: parsed.emoji, sticker_id: parsed.sticker_id ?? null, sticker: stickers.find((item) => item.id === parsed.sticker_id) ?? null, mood_score: parsed.mood_score ?? getMood(parsed.emoji).score, note: parsed.note.trim() || null, created_at: existing?.created_at ?? new Date().toISOString(), tags: parsed.tags.map((name) => tags.find((tag) => tag.name === name) ?? { id: crypto.randomUUID(), name }) };
       const nextEntries = [saved, ...source.filter((value) => value.date !== saved.date)].sort((a, b) => b.date.localeCompare(a.date));
       const nextTags = [...new Map([...tags, ...saved.tags].map((tag) => [tag.name, tag])).values()].sort((a, b) => a.name.localeCompare(b.name));
-      const next = session ? await persistVault(session, { ...session.document, entries: nextEntries, tags: nextTags }) : null;
+      const next = session ? await persistVault(session, withReceipts({ ...session.document, entries: nextEntries, tags: nextTags })) : null;
       if (generation !== epoch.current) throw new Error("Journal locked. Unlock to see your latest saved data.");
       if (next) { vault.current = next; row.current = next.row; }
       setEntries(nextEntries.map((entry) => ({ ...entry, sticker: stickers.find((item) => item.id === entry.sticker_id) ?? null }))); setTags(nextTags);
       return saved;
     } finally { if (generation === epoch.current) writing.current = false; }
-  }, [demo, entries, tags, timezone, stickers, profile.id]);
+  }, [demo, entries, tags, timezone, stickers, profile.id, withReceipts]);
   const uploadSticker = useCallback(async (file: File, name?: string): Promise<Sticker> => {
     if (writing.current) throw new Error("Wait for the current save to finish.");
     if (!file.size || file.size > MAX_STICKER_BYTES) throw new Error("Choose a sticker smaller than 3 MB.");
@@ -155,14 +166,14 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
       let next: UnlockedVault | null = null;
       if (session) {
         await addEncryptedSticker(file, sticker, session.key);
-        next = await persistVault(session, { ...session.document, stickers: [sticker, ...session.document.stickers] });
+        next = await persistVault(session, withReceipts({ ...session.document, stickers: [sticker, ...session.document.stickers] }));
       }
       if (generation !== epoch.current) throw new Error("Journal locked. Unlock to reload your library.");
       if (next) { vault.current = next; row.current = next.row; }
       sticker.preview_url = URL.createObjectURL(file); objectUrls.current.push(sticker.preview_url);
       setStickers((current) => [sticker, ...current]); return sticker;
     } finally { if (generation === epoch.current) writing.current = false; }
-  }, [demo, profile.id]);
+  }, [demo, profile.id, withReceipts]);
   const remove = useCallback(async (kind: "entry" | "sticker", id: string) => {
     if (writing.current) throw new Error("Wait for the current save to finish.");
     const generation = epoch.current; const session = vault.current;
@@ -170,7 +181,8 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
     writing.current = true;
     try {
       const local: VaultDocument = { version: 1, entries, tags, stickers, migration: { fingerprint: "", legacyPaths: [] } };
-      const next = session ? await (kind === "entry" ? deleteVaultEntry(session, id) : deleteVaultSticker(session, id)) : null;
+      const current = session ? { ...session, document: withReceipts(session.document) } : null;
+      const next = current ? await (kind === "entry" ? deleteVaultEntry(current, id) : deleteVaultSticker(current, id)) : null;
       const document = next?.document ?? (kind === "entry" ? withoutEntry(local, id) : withoutSticker(local, id));
       if (generation !== epoch.current) throw new Error("Journal locked. Unlock to see your latest data.");
       if (next) { vault.current = next; row.current = next.row; }
@@ -184,7 +196,7 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
       setEntries(document.entries.map((entry) => ({ ...entry, sticker: remaining.find((item) => item.id === entry.sticker_id) ?? null })));
       setTags(document.tags); setStickers(remaining); setPendingStickerDeletes(demo ? 0 : document.pendingStickerDeletes?.length ?? 0);
     } finally { if (generation === epoch.current) writing.current = false; }
-  }, [demo, entries, tags, stickers]);
+  }, [demo, entries, tags, stickers, withReceipts]);
   const deleteEntry = useCallback((id: string) => remove("entry", id), [remove]);
   const deleteSticker = useCallback((id: string) => remove("sticker", id), [remove]);
   const retryStickerDeletes = useCallback(async () => {
@@ -200,8 +212,28 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
       if (next.document.pendingStickerDeletes?.length) throw new Error("File cleanup is still pending. Try again later, or lock and unlock to reload your journal.");
     } finally { if (generation === epoch.current) writing.current = false; }
   }, []);
+  const streakNotice = useMemo(() => clockReady ? getStreakNotice(entries, today, seenStreakEvents) : null, [clockReady, entries, today, seenStreakEvents]);
+  const dismissStreakNotice = useCallback(async (id: string) => {
+    if (noticeReceipts.current.includes(id)) return;
+    const generation = epoch.current; const session = vault.current;
+    if (!demo && !session) return;
+    // A visible notice must remain dismissible if the clock rolls over before
+    // the next UI tick. Acknowledge the displayed event, not a newly derived one.
+    if (streakNotice?.id !== id) return;
+    noticeReceipts.current = mergeStreakReceipts(noticeReceipts.current, [id]);
+    setSeenStreakEvents(noticeReceipts.current);
+    // Dismissals never block journaling. If offline or another write is in
+    // progress, retain the receipt in memory and include it in the next save.
+    if (!session || writing.current) return;
+    writing.current = true;
+    try {
+      const next = await persistVault(session, withReceipts(session.document));
+      if (generation === epoch.current) { vault.current = next; row.current = next.row; }
+    } catch { /* A subsequent save retries the encrypted receipt. */ }
+    finally { if (generation === epoch.current) writing.current = false; }
+  }, [demo, streakNotice, withReceipts]);
   const encrypted = !demo && unlocked && vault.current?.row.migration_stage === "complete";
-  const value = useMemo(() => ({ entries, tags, today, timezone, demo, email, save, profile, stickers, rename, uploadSticker, encrypted, lock, deleteEntry, deleteSticker, pendingStickerDeletes, retryStickerDeletes }), [entries, tags, today, timezone, demo, email, save, profile, stickers, rename, uploadSticker, encrypted, lock, deleteEntry, deleteSticker, pendingStickerDeletes, retryStickerDeletes]);
+  const value = useMemo(() => ({ entries, tags, today, timezone, demo, email, save, profile, stickers, rename, uploadSticker, encrypted, lock, deleteEntry, deleteSticker, pendingStickerDeletes, retryStickerDeletes, streakNotice, dismissStreakNotice }), [entries, tags, today, timezone, demo, email, save, profile, stickers, rename, uploadSticker, encrypted, lock, deleteEntry, deleteSticker, pendingStickerDeletes, retryStickerDeletes, streakNotice, dismissStreakNotice]);
   return <JournalContext.Provider value={value}>{demo || unlocked ? children : <VaultGate stage={stage} busy={busy} error={error} progress={progress} username={profile.username} onRetry={() => void refreshVault()}
     onSetup={(passphrase, recovery) => openVault(() => initializeVault(profile.id, passphrase, recovery, setProgress))}
     onUnlock={(passphrase) => openVault(async () => { if (!row.current) throw new Error("Reload to check your vault."); return unlockVault(row.current, passphrase, setProgress); })}

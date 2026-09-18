@@ -4,6 +4,7 @@ import { useMemo, useRef, useState, type KeyboardEvent, type CSSProperties } fro
 import { motion } from "framer-motion";
 import { calendarDays, formatDate, yearStart } from "@/lib/dates";
 import { getEntryMood, MOODS } from "@/lib/moods";
+import { canCheckIn } from "@/lib/check-in-policy";
 import type { Entry } from "@/lib/types";
 
 export type MoodCalendarProps = { entries: Entry[]; today: string; onSelect?: (date: string) => void; className?: string };
@@ -40,24 +41,25 @@ export function MoodCalendar({ entries, today, onSelect, className = "" }: MoodC
           {days.map((date, index) => {
             const entry = byDate.get(date);
             const outside = date < yearStart(today) || date > today;
+            const writable = canCheckIn(date, today, Boolean(entry));
             const style = { backgroundColor: entry ? getEntryMood(entry).color : undefined, opacity: outside ? 0 : undefined };
-            const description = `${formatDate(date, { month: "long", day: "numeric", year: "numeric" })}: ${entry ? `${getEntryMood(entry).label}. ${entry.note ?? ""}` : "No check-in"}${date === today ? ", today" : ""}`;
+            const description = `${formatDate(date, { month: "long", day: "numeric", year: "numeric" })}: ${entry ? `${getEntryMood(entry).label}. ${entry.note ?? ""}` : date < today ? "Missed day, closed" : "No check-in"}${date === today ? ", today" : ""}`;
             if (!onSelect) return <span key={date} className={`calendar-cell ${date === today ? "is-today" : ""}`} style={style} title={outside ? undefined : description} />;
             return <motion.button key={date} ref={(node) => { if (node) refs.current.set(date, node); else refs.current.delete(date); }}
-              type="button" className={`calendar-cell ${date === today ? "is-today" : ""}`} style={style} disabled={outside}
+              type="button" className={`calendar-cell ${date === today ? "is-today" : ""} ${!writable ? "is-closed" : ""}`} style={style} disabled={outside} aria-disabled={!writable || outside}
               tabIndex={date === active ? 0 : -1} aria-label={description} aria-describedby={tooltip?.date === date ? "calendar-tooltip" : undefined}
               onMouseEnter={(event) => show(date, event.currentTarget)} onMouseLeave={() => setTooltip(null)}
               onFocus={(event) => { setActive(date); show(date, event.currentTarget); }} onBlur={() => setTooltip(null)}
-              onKeyDown={(event) => keydown(event, index)} onClick={() => { setTooltip(null); onSelect(date); }}
-              whileHover={{ scale: 1.35, zIndex: 2 }} whileTap={{ scale: 0.9 }} transition={{ type: "spring", stiffness: 500, damping: 20 }} />;
+              onKeyDown={(event) => keydown(event, index)} onClick={() => { if (writable) { setTooltip(null); onSelect(date); } }}
+              whileHover={writable ? { scale: 1.35, zIndex: 2 } : undefined} whileTap={writable ? { scale: 0.9 } : undefined} transition={{ type: "spring", stiffness: 500, damping: 20 }} />;
           })}
         </div>
       </div>
     </div>
     <div className="calendar-legend"><span>Every color, a feeling.</span><div><span>No entry <i className="legend-square" /></span><span className="legend-divider" />{[MOODS[0], MOODS[6], MOODS[15], MOODS[25], MOODS[32]].map((mood) => <span key={mood.emoji} title={mood.label}><i className="legend-square" style={{ backgroundColor: mood.color }} />{mood.emoji}</span>)}<span className="text-muted">+ more</span></div></div>
     {tooltip && <div id="calendar-tooltip" role="tooltip" className="calendar-tooltip" style={{ left: tooltip.x, top: tooltip.y, transform: `translate(-50%, ${tooltip.below ? "0" : "-100%"})` }}>
-      <div className="flex items-center gap-3"><span className="text-3xl">{tooltip.entry ? <EntryVisual entry={tooltip.entry} size={40} /> : "○"}</span><div><strong>{tooltip.entry ? getEntryMood(tooltip.entry).label : "A little space to fill"}</strong><p className="mt-1 text-xs text-muted">{formatDate(tooltip.date, { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</p></div></div>
-      {tooltip.entry?.note && <p className="mt-3 line-clamp-3 text-sm text-muted">{tooltip.entry.note}</p>}<p className="mt-3 text-xs text-mint">Click to {tooltip.entry ? "view or edit" : "check in"}</p>
+      <div className="flex items-center gap-3"><span className="text-3xl">{tooltip.entry ? <EntryVisual entry={tooltip.entry} size={40} /> : "○"}</span><div><strong>{tooltip.entry ? getEntryMood(tooltip.entry).label : tooltip.date < today ? "Missed day" : "Today is yours"}</strong><p className="mt-1 text-xs text-muted">{formatDate(tooltip.date, { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</p></div></div>
+      {tooltip.entry?.note && <p className="mt-3 line-clamp-3 text-sm text-muted">{tooltip.entry.note}</p>}<p className="mt-3 text-xs text-mint">{tooltip.entry ? "Click to view or edit" : tooltip.date < today ? "Past days cannot be filled in." : "Click to check in"}</p>
     </div>}
   </div>;
 }

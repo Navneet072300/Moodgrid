@@ -219,3 +219,18 @@ test("cleanup refuses foreign paths or objects still in the active library", asy
     assert.equal(mock.events.includes("encrypted-file-delete"), false);
   } finally { mock.restore(); }
 });
+
+test("streak popup dismissals survive encrypted saves and unlock without leaking dates", async () => {
+  const mock = backend();
+  const passphrase = "a streak notice test with a long passphrase";
+  try {
+    const vault = await initializeVault(ALICE, passphrase, newRecoveryKey(), () => {});
+    const receipts = ["break:2026-09-16", "milestone:2026-01-01:50"];
+    const saved = await persistVault(vault, { ...vault.document, seenStreakEvents: receipts });
+    const unlocked = await unlockVault(saved.row, passphrase, () => {});
+    assert.deepEqual(unlocked.document.seenStreakEvents, receipts);
+    const deleted = await deleteVaultEntry(unlocked, unlocked.document.entries[0].id);
+    assert.deepEqual(deleted.document.seenStreakEvents, receipts);
+    for (const secret of [...receipts, "2026-09-16"]) assert.equal(mock.outgoing.some((body) => body.includes(secret)), false);
+  } finally { mock.restore(); }
+});

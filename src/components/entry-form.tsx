@@ -10,6 +10,7 @@ import { DeleteMomentButton } from "./delete-button";
 import { useJournal } from "./journal-provider";
 import { getMood } from "@/lib/moods";
 import { formatDate } from "@/lib/dates";
+import { canCheckIn } from "@/lib/check-in-policy";
 
 export function EntryForm({ date, onSaved, onDeleted }: { date: string; onSaved?: () => void; onDeleted?: () => void }) {
   const { entries, tags: suggestions, save, demo, today, stickers } = useJournal();
@@ -42,6 +43,7 @@ export function EntryForm({ date, onSaved, onDeleted }: { date: string; onSaved?
     try { await save({ date, emoji: emoji || null, sticker_id: stickerId, mood_score: score, note, tags }); setStatus("saved"); onSaved?.(); }
     catch (error) { setStatus("idle"); setError(error instanceof Error ? error.message : "Couldn't save. Please try again."); }
   }
+  if (!canCheckIn(date, today, Boolean(entry))) return <div className="missed-day-message"><span aria-hidden="true">🌙</span><h2>This day has passed</h2><p>New check-ins can only be added for today.</p></div>;
   return <form onSubmit={submit} className="entry-form">
     <div className="entry-heading"><div><span className="eyebrow">{date === today ? "CHECK-IN" : formatDate(date, { month: "long", day: "numeric", year: "numeric" })}</span><h2>{date === today ? "How are you feeling?" : "How did this day feel?"}</h2></div><AnimatePresence mode="wait"><motion.span key={stickerId || emoji || "default"} initial={{ scale: 0.4, rotate: -15 }} animate={{ scale: 1, rotate: 0 }} transition={{ type: "spring", stiffness: 350, damping: 13 }} className="mood-orb" aria-label={stickerId ? sticker?.name : emoji ? getMood(emoji).label : "Your mood"}>{emoji || stickerId ? <EntryVisual entry={{ emoji: emoji || null, sticker: stickerId ? sticker : null }} size={52} /> : "✺"}</motion.span></AnimatePresence></div>
     <div className="expression-tabs" role="group" aria-label="Choose expression type"><button type="button" aria-pressed={mode === "emoji"} onClick={() => setMode("emoji")}>😊 Emojis</button><button type="button" aria-pressed={mode === "sticker"} onClick={() => setMode("sticker")}>✦ Stickers {stickers.length > 0 && <span>{stickers.length}</span>}</button></div>

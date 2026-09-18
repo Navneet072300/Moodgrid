@@ -82,7 +82,8 @@ A database reader without the passphrase/recovery key cannot decrypt properly en
 
 ## Features
 
-- Daily check-in with 3,963 emoji choices, searchable categories, skin tones/families/flags, optional 280-character notes, eight tags, and sticker selection. One entry per date is maintained inside the encrypted document.
+- Daily check-in with 3,963 emoji choices, searchable categories, skin tones/families/flags, optional 280-character notes, eight tags, and sticker selection. New entries can only be created for the current local day; missed days are closed. Existing past entries can still be edited or deleted. The browser rechecks the local date at save time, including across midnight. One entry per date is maintained inside the encrypted document.
+- Gentle streak-break popups after a full missed day, and celebrations at 50, 100, 150 days and every subsequent multiple of 50. Dismissal receipts are stored inside the encrypted vault, with no additional database table or migration. Offline dismissals stay in memory and are included in the next successful save; they can reappear after a reload if they could not be saved. Demo dismissals last only during the visit.
 - Private sticker library: PNG/JPG/WebP/GIF/WebM, up to 3 MiB per file and 20 uploads per batch. Export Telegram `.tgs` or messaging-app packs to supported individual files first. Original format validation occurs locally, before encryption.
 - Contribution calendar, edit dialogs, and confirmed moment/sticker deletion, all derived locally after unlock.
 - Insights presets: 7/14/30/60/90/180 days, one year, all time, or custom inclusive dates. Scores are optional for general emojis and stickers; unscored entries do not distort averages. Long ranges aggregate into bounded chart periods.

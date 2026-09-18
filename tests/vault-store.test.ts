@@ -4,6 +4,7 @@ import { initializeVault, persistVault, unlockVault, recoverVault, deleteVaultEn
 import { decryptJSON, newRecoveryKey, type Envelope, type KeyConfig } from "../src/lib/vault/crypto";
 import type { VaultDocument, VaultRow } from "../src/lib/vault/types";
 import { ALICE, BOB } from "./supabase-fixture";
+import { presetAppearance } from "../src/lib/appearance";
 
 // Exercise the real Supabase JS request/response layer without a hosted account.
 // SQL permissions/transactions are covered separately with actual Postgres migrations.
@@ -232,5 +233,48 @@ test("streak popup dismissals survive encrypted saves and unlock without leaking
     const deleted = await deleteVaultEntry(unlocked, unlocked.document.entries[0].id);
     assert.deepEqual(deleted.document.seenStreakEvents, receipts);
     for (const secret of [...receipts, "2026-09-16"]) assert.equal(mock.outgoing.some((body) => body.includes(secret)), false);
+  } finally { mock.restore(); }
+});
+
+test("custom themes survive save, unlock, recovery and moment deletion with no plaintext preferences sent", async () => {
+  const mock = backend();
+  const passphrase = "a private theme test with a long passphrase";
+  const recovery = newRecoveryKey();
+  try {
+    const vault = await initializeVault(ALICE, passphrase, recovery, () => {});
+    const appearance = { ...presetAppearance("strawberry"), background: "#fad3e7", wallpaper: "sticker" as const, stickerId: vault.document.stickers[0].id, opacity: 0.27 };
+    const saved = await persistVault(vault, { ...vault.document, appearance });
+    const unlocked = await unlockVault(saved.row, passphrase, () => {});
+    assert.deepEqual(unlocked.document.appearance, appearance);
+    assert.deepEqual(unlocked.document.entries, vault.document.entries);
+    assert.deepEqual(unlocked.document.tags, vault.document.tags);
+    const deleted = await deleteVaultEntry(unlocked, unlocked.document.entries[0].id);
+    assert.deepEqual(deleted.document.appearance, appearance);
+    const recovered = await recoverVault(deleted.row, recovery, "a changed private theme passphrase", () => {});
+    assert.deepEqual(recovered.document.appearance, appearance);
+    for (const secret of ["strawberry", "#fad3e7", appearance.stickerId, '"appearance"', '"opacity"']) assert.equal(mock.outgoing.some((body) => body.includes(secret)), false, `Theme leaked: ${secret}`);
+    await assert.rejects(persistVault(saved, { ...saved.document, appearance: presetAppearance("cloud") }), /vault changed|connection failed/i);
+    assert.deepEqual((await unlockVault(recovered.row, "a changed private theme passphrase", () => {})).document.appearance, appearance);
+  } finally { mock.restore(); }
+});
+
+test("deleting the wallpaper sticker clears its encrypted selection and retains the chosen colors", async () => {
+  const mock = backend();
+  const passphrase = "a wallpaper deletion test passphrase";
+  try {
+    const vault = await initializeVault(ALICE, passphrase, newRecoveryKey(), () => {});
+    const appearance = { ...presetAppearance("lavender"), background: "#dcc3ef", wallpaper: "sticker" as const, stickerId: vault.document.stickers[0].id };
+    const saved = await persistVault(vault, { ...vault.document, appearance });
+    // Failed file cleanup must not restore a dangling wallpaper reference.
+    mock.failures.denyDeletes = true;
+    const deleted = await deleteVaultSticker(saved, appearance.stickerId);
+    const unlocked = await unlockVault(deleted.row, passphrase, () => {});
+    assert.deepEqual(unlocked.document.appearance, { ...appearance, wallpaper: "none", stickerId: null });
+    assert.equal(unlocked.document.stickers.length, 0);
+    assert.equal(unlocked.document.pendingStickerDeletes?.length, 1);
+    mock.failures.denyDeletes = false;
+    const cleaned = await cleanupDeletedStickers(unlocked);
+    assert.deepEqual(cleaned.document.appearance, unlocked.document.appearance);
+    assert.equal(mock.fileCount(), 0);
   } finally { mock.restore(); }
 });

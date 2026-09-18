@@ -42,7 +42,7 @@ Each account has a private profile with its email and an automatically generated
 
 ## Encryption design
 
-- **Content:** a single encrypted vault document contains all entry dates, emojis, notes, mood scores, timestamps, tags, tag associations, sticker names, original MIME types, and file references. No date or tag search index is stored in plaintext. Filtering, charts, and streaks are computed after local decryption.
+- **Content:** a single encrypted vault document contains all entry dates, emojis, notes, mood scores, timestamps, tags, tag associations, sticker names, original MIME types, file references, theme preferences, and streak-notice receipts. No date or tag search index is stored in plaintext. Filtering, charts, and streaks are computed after local decryption.
 - **Algorithms:** Web Crypto AES-256-GCM with a fresh random 96-bit IV and a 128-bit authentication tag for every encryption. Authenticated context binds each message to its account and purpose, and sticker ciphertext to its sticker ID. JSON is length-prefixed and padded to 4 KiB blocks before encryption. Sticker bytes are encrypted separately.
 - **Keys:** a random 256-bit data key is wrapped by a key derived from the user's passphrase using PBKDF2-HMAC-SHA-256, 600,000 iterations, and a random 128-bit salt. A separate random 256-bit recovery secret wraps the same data key. Only the wrapped keys, salt, work factor, and ciphertext reach Supabase. Passphrases are 16–256 characters; use a password manager or at least five random words. Length alone does not ensure strength.
 - **Recovery:** users must acknowledge saving their generated recovery key before initial migration. Recovery unwraps the existing data key and wraps it under a new passphrase. Email access alone cannot recover a journal. Losing both the passphrase and recovery secret makes the journal unrecoverable. Rewrapping does not revoke a previously stolen data key or old key wrappers.
@@ -82,13 +82,14 @@ A database reader without the passphrase/recovery key cannot decrypt properly en
 
 ## Features
 
+- Personal themes from the palette button beside the avatar: eight light/dark palettes, custom background colors with adaptive text contrast, seven decorative patterns, and image-sticker wallpapers with adjustable visibility. Preview changes live, apply, cancel, or reset to Forest night. Preferences are stored inside the encrypted vault and restored after unlock; no new SQL migration or plaintext browser storage is needed. Deleting a wallpaper sticker clears its wallpaper selection and keeps the colors. Wallpaper uploads also stay in the sticker library if theme changes are canceled.
 - Daily check-in with 3,963 emoji choices, searchable categories, skin tones/families/flags, optional 280-character notes, eight tags, and sticker selection. New entries can only be created for the current local day; missed days are closed. Existing past entries can still be edited or deleted. The browser rechecks the local date at save time, including across midnight. One entry per date is maintained inside the encrypted document.
 - Gentle streak-break popups after a full missed day, and celebrations at 50, 100, 150 days and every subsequent multiple of 50. Dismissal receipts are stored inside the encrypted vault, with no additional database table or migration. Offline dismissals stay in memory and are included in the next successful save; they can reappear after a reload if they could not be saved. Demo dismissals last only during the visit.
 - Private sticker library: PNG/JPG/WebP/GIF/WebM, up to 3 MiB per file and 20 uploads per batch. Export Telegram `.tgs` or messaging-app packs to supported individual files first. Original format validation occurs locally, before encryption.
 - Contribution calendar, edit dialogs, and confirmed moment/sticker deletion, all derived locally after unlock.
 - Insights presets: 7/14/30/60/90/180 days, one year, all time, or custom inclusive dates. Scores are optional for general emojis and stickers; unscored entries do not distort averages. Long ranges aggregate into bounded chart periods.
 - Local weekly reflection. No journal content is sent to an AI service.
-- Concise dark interface, responsive filters, keyboard emoji navigation, and animations.
+- Responsive light/dark interfaces, keyboard emoji navigation, and animations.
 
 Unicode data and the included [license](licenses/UNICODE-LICENSE.txt) come from [Unicode emoji-test data](https://www.unicode.org/Public/emoji/latest/emoji-test.txt). The bundled version is 18.0, with 3,963 picker choices and 5,235 accepted presentation sequences. Device fonts determine glyph support. To update, use `scripts/generate-emoji-catalog.py` and add a new production migration for already-installed databases.
 

@@ -7,6 +7,7 @@ import { todayInTimezone } from "@/lib/dates";
 import { assertCheckInDate } from "@/lib/check-in-policy";
 import { getStreakNotice, mergeStreakReceipts, type StreakNotice } from "@/lib/streak-notices";
 import { entrySchema, usernameSchema } from "@/lib/validation";
+import { appearanceSchema, DEFAULT_APPEARANCE, type Appearance } from "@/lib/appearance";
 import { createClient } from "@/lib/supabase/client";
 import { addEncryptedSticker, cleanupDeletedStickers, deleteVaultEntry, deleteVaultSticker, encryptedFile, initializeVault, loadVault, persistVault, recoverVault, unlockVault, type UnlockedVault } from "@/lib/vault/store";
 import { withoutEntry, withoutSticker } from "@/lib/vault/document";
@@ -26,6 +27,8 @@ type JournalContextValue = {
   retryStickerDeletes: () => Promise<void>;
   streakNotice: StreakNotice | null;
   dismissStreakNotice: (id: string) => Promise<void>;
+  appearance: Appearance;
+  saveAppearance: (appearance: Appearance) => Promise<void>;
 };
 const JournalContext = createContext<JournalContextValue | null>(null);
 export function JournalProvider({ children, initialEntries, initialTags, initialToday, email, initialProfile, demo = false }: {
@@ -40,6 +43,7 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
   const [timezone, setTimezone] = useState("UTC");
   const [clockReady, setClockReady] = useState(false);
   const [seenStreakEvents, setSeenStreakEvents] = useState<string[]>([]);
+  const [appearance, setAppearance] = useState<Appearance>(DEFAULT_APPEARANCE);
   const [unlocked, setUnlocked] = useState(false);
   const [stage, setStage] = useState<"loading" | "setup" | "locked" | "error">("loading");
   const [busy, setBusy] = useState(false);
@@ -64,6 +68,7 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
     if (demo) return;
     epoch.current++; vault.current = null; row.current = null; writing.current = false;
     noticeReceipts.current = []; setSeenStreakEvents([]);
+    setAppearance(DEFAULT_APPEARANCE);
     clearUrls(); setEntries([]); setTags([]); setStickers([]); setPendingStickerDeletes(0); setUnlocked(false); setBusy(false); setProgress("");
     void refreshVault();
   }, [demo, clearUrls, refreshVault]);
@@ -100,6 +105,7 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
       if (generation !== epoch.current) { urls.forEach((url) => URL.revokeObjectURL(url)); return; }
       clearUrls(); objectUrls.current = urls; vault.current = session; row.current = session.row;
       noticeReceipts.current = session.document.seenStreakEvents ?? []; setSeenStreakEvents(noticeReceipts.current);
+      setAppearance(session.document.appearance ?? DEFAULT_APPEARANCE);
       setEntries(session.document.entries.map((entry) => ({ ...entry, sticker: local.find((item) => item.id === entry.sticker_id) ?? null })).sort((a, b) => b.date.localeCompare(a.date)));
       setTags(session.document.tags); setStickers(local); setPendingStickerDeletes(session.document.pendingStickerDeletes?.length ?? 0); setUnlocked(true);
     } catch (error) { urls.forEach((url) => URL.revokeObjectURL(url)); throw error; }
@@ -180,7 +186,7 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
     if (!demo && !session) throw new Error("Unlock your journal before deleting.");
     writing.current = true;
     try {
-      const local: VaultDocument = { version: 1, entries, tags, stickers, migration: { fingerprint: "", legacyPaths: [] } };
+      const local: VaultDocument = { version: 1, entries, tags, stickers, appearance, migration: { fingerprint: "", legacyPaths: [] } };
       const current = session ? { ...session, document: withReceipts(session.document) } : null;
       const next = current ? await (kind === "entry" ? deleteVaultEntry(current, id) : deleteVaultSticker(current, id)) : null;
       const document = next?.document ?? (kind === "entry" ? withoutEntry(local, id) : withoutSticker(local, id));
@@ -195,8 +201,9 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
       }
       setEntries(document.entries.map((entry) => ({ ...entry, sticker: remaining.find((item) => item.id === entry.sticker_id) ?? null })));
       setTags(document.tags); setStickers(remaining); setPendingStickerDeletes(demo ? 0 : document.pendingStickerDeletes?.length ?? 0);
+      setAppearance(document.appearance ?? DEFAULT_APPEARANCE);
     } finally { if (generation === epoch.current) writing.current = false; }
-  }, [demo, entries, tags, stickers, withReceipts]);
+  }, [demo, entries, tags, stickers, appearance, withReceipts]);
   const deleteEntry = useCallback((id: string) => remove("entry", id), [remove]);
   const deleteSticker = useCallback((id: string) => remove("sticker", id), [remove]);
   const retryStickerDeletes = useCallback(async () => {
@@ -232,8 +239,23 @@ export function JournalProvider({ children, initialEntries, initialTags, initial
     } catch { /* A subsequent save retries the encrypted receipt. */ }
     finally { if (generation === epoch.current) writing.current = false; }
   }, [demo, streakNotice, withReceipts]);
+  const saveAppearance = useCallback(async (input: Appearance) => {
+    if (writing.current) throw new Error("Wait for the current save to finish.");
+    const parsed = appearanceSchema.parse(input);
+    const generation = epoch.current; const session = vault.current;
+    if (!demo && !session) throw new Error("Unlock your journal to change its theme.");
+    const library = session?.document.stickers ?? stickers;
+    if (parsed.wallpaper === "sticker" && !library.some((sticker) => sticker.id === parsed.stickerId && sticker.mime_type.startsWith("image/"))) throw new Error("Choose an image sticker from your library.");
+    writing.current = true;
+    try {
+      const next = session ? await persistVault(session, withReceipts({ ...session.document, appearance: parsed })) : null;
+      if (generation !== epoch.current) throw new Error("Journal locked. Unlock to reload your theme.");
+      if (next) { vault.current = next; row.current = next.row; }
+      setAppearance(parsed);
+    } finally { if (generation === epoch.current) writing.current = false; }
+  }, [demo, stickers, withReceipts]);
   const encrypted = !demo && unlocked && vault.current?.row.migration_stage === "complete";
-  const value = useMemo(() => ({ entries, tags, today, timezone, demo, email, save, profile, stickers, rename, uploadSticker, encrypted, lock, deleteEntry, deleteSticker, pendingStickerDeletes, retryStickerDeletes, streakNotice, dismissStreakNotice }), [entries, tags, today, timezone, demo, email, save, profile, stickers, rename, uploadSticker, encrypted, lock, deleteEntry, deleteSticker, pendingStickerDeletes, retryStickerDeletes, streakNotice, dismissStreakNotice]);
+  const value = useMemo(() => ({ entries, tags, today, timezone, demo, email, save, profile, stickers, rename, uploadSticker, encrypted, lock, deleteEntry, deleteSticker, pendingStickerDeletes, retryStickerDeletes, streakNotice, dismissStreakNotice, appearance, saveAppearance }), [entries, tags, today, timezone, demo, email, save, profile, stickers, rename, uploadSticker, encrypted, lock, deleteEntry, deleteSticker, pendingStickerDeletes, retryStickerDeletes, streakNotice, dismissStreakNotice, appearance, saveAppearance]);
   return <JournalContext.Provider value={value}>{demo || unlocked ? children : <VaultGate stage={stage} busy={busy} error={error} progress={progress} username={profile.username} onRetry={() => void refreshVault()}
     onSetup={(passphrase, recovery) => openVault(() => initializeVault(profile.id, passphrase, recovery, setProgress))}
     onUnlock={(passphrase) => openVault(async () => { if (!row.current) throw new Error("Reload to check your vault."); return unlockVault(row.current, passphrase, setProgress); })}

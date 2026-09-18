@@ -17,6 +17,7 @@ export function withoutSticker(document: VaultDocument, id: string): VaultDocume
   return {
     ...document,
     stickers: document.stickers.filter((item) => item.id !== id),
+    appearance: document.appearance?.stickerId === id ? { ...document.appearance, wallpaper: "none", stickerId: null } : document.appearance,
     pendingStickerDeletes: [...new Set([...(document.pendingStickerDeletes ?? []), sticker.storage_path])],
   };
 }
